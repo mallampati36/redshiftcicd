@@ -1,0 +1,493 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Cloudformation template for Amazon Redshift. Pre-requisites: Create new KMS Key."
+Parameters:
+  VPCID: 
+    Description: The ID of your existing VPC that we're deploying Redshift into.
+    Type : 'String'
+    Default: "vpc-0eb96701a9b96545b"
+  RemoteAccessCIDR:
+    ConstraintDescription: CIDR block parameter must be in the form x.x.x.x/x
+    Description: Allowed CIDR block to access Redshift cluster.
+    Type : 'String'
+    Default: "10.0.0.0/16"
+  Subnet1ID:
+    Description: The ID of the private subnet in Availability Zone 1 in existing VPC.
+    Type : 'String'
+    Default: "subnet-018c95e0fb58f0910"
+  Subnet2ID:
+    Description: The ID of the private subnet in Availability Zone 2 in existing VPC.
+    Type : 'String'
+    Default: "subnet-0fc898e99ae426e58"
+  Subnet3ID:
+    Description: The ID of the private subnet in Availability Zone 3 in existing VPC.
+    Type : 'String'
+    Default: "subnet-054d611630eb610c5"
+  RedShiftClusterName:
+    Description: The name of the first cluster to be created when the cluster is created.
+    Type: String
+    Default: "cftrscluster"
+    AllowedPattern: '([a-z]|[0-9])+' 
+  DatabaseName:
+    Description: The name of the first database to be created when the cluster is created.
+    Type: String
+    Default: "cftrsdb"
+    AllowedPattern: '([a-z]|[0-9])+' 
+  RedshiftClusterPort:
+    Description: The port number on which the RedShift cluster accepts incoming connections.
+    Type: Number
+    Default: '5439'
+  NumberOfNodes:
+    Description: The number of compute nodes in the cluster. For multi-node clusters, the NumberOfNodes parameter must be greater than 1.
+    Type: Number
+    Default: '1'
+  NodeType:
+    Description: The type of node to be provisioned
+    Type: String
+    Default: dc2.large
+    AllowedValues:
+      - dc2.large
+      - dc2.8xlarge
+      - ds2.xlarge
+      - ds2.8xlarge
+  MasterUsername:
+    Description: The user name that is associated with the master user account for the RedShift cluster that is being created.
+    Type: String
+    Default: rsadmin
+    AllowedPattern: '([a-z])([a-z]|[0-9])*'
+    ConstraintDescription: must start with a-z and contain only a-z or 0-9.
+  Maintenancewindow:
+    Description: The maintenance window for the Redshift cluster.
+    Type: String
+    Default: 'sat:05:00-sat:05:30'
+  MaxConcurrentCluster:
+    Description: The maximum number of concurrency scaling Redshift clusters.
+    Type: String
+    Default: '1'
+  EncryptionAtRest:
+    Description: Enables or disables encryption at rest of the Redshift database.
+    Type: String
+    Default: false
+    AllowedValues:
+      - true
+      - false
+    ConstraintDescription: must be true or false.
+  kmskey:
+    Description: The existing KMS key ID for encrypting Redshift database at-rest.
+    Type: String
+    Default: ''
+  NotificationList:
+    Type: String
+    Description: The email notification list that is used to configure an SNS topic for sending CloudWatch alarm and event notifications.
+    ConstraintDescription: provide a valid email address.  
+    Default: 'mallampati.sandeep36@gmail.com'
+  SnapshotIdentifier:
+    Description: The Redshift snapshot identifier. Leave this blank for a new cluster. Enter the snapshot identifier, only if you want to restore from a snapshot.
+    Default: ''
+    Type: String
+  SnapshotAccountNumber:
+    Description: The AWS account number where the Redshift snapshot was created. Leave this blank, if the snapshot was created in the current AWS account.
+    Default: ''
+    Type: String
+  GlueCatalogDatabase:
+    Default: ''
+    Type: String
+    Description: The name of the Glue Data Catalog database.
+    AllowedPattern: '([ \t\n\x0B\f\r])*|([a-z])([\-]|[a-z]|[\-]|[0-9])*'
+    ConstraintDescription: must start with a-z and contain only a-z or 0-9 or hyphen (-).
+  TagName:
+    Type: String
+    Description: The unique friendly name which will be added to the environment tag.
+    Default: 'pocflyway'
+  TagEnvironment:
+    Type: String
+    Default: 'dev'
+    AllowedValues:
+      - dev
+      - test
+      - prod
+    Description: The environment tag that is used to designate the environment stage of the associated AWS resource.
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: VPC Network Configuration
+        Parameters:
+          - VPCID
+          - Subnet1ID
+          - Subnet2ID
+          - Subnet3ID
+          - RemoteAccessCIDR
+      - Label:
+          default: Amazon Redshift configuration
+        Parameters:
+          - NodeType
+          - NumberOfNodes
+          - RedshiftClusterPort
+          - DatabaseName
+          - MasterUsername
+          - NotificationList
+      -
+        Label:
+          default: Amazon Redshift advanced configuration
+        Parameters:
+          - MaxConcurrentCluster
+          - EncryptionAtRest
+          - kmskey
+          - SnapshotIdentifier
+          - SnapshotAccountNumber
+          - Maintenancewindow
+          - GlueCatalogDatabase
+      -
+        Label:
+          default: Tag identifiers
+        Parameters:
+          - TagEnvironment
+          - TagName
+    ParameterLabels:
+      VPCID:
+        default: VPC ID
+      Subnet1ID:
+        default: Private subnet 1 ID
+      Subnet2ID:
+        default: Private subnet 2 ID
+      Subnet3ID:
+        default: Private subnet 3 ID
+      RemoteAccessCIDR:
+        default: Permitted IP range
+      DatabaseName:
+        default: Redshift database name
+      RedshiftClusterPort:
+        default: Redshift cluster port
+      NodeType:
+        default: Node type for Redshift cluster
+      NumberOfNodes:
+        default: Number of nodes in Redshift cluster
+      MasterUsername:
+        default: Redshift master user name
+      NotificationList:
+        default: Email address for SNS notification
+      MaxConcurrentCluster:
+        default: Max. number of concurrent clusters
+      EncryptionAtRest:
+        default: Encryption at rest
+      kmskey:
+        default: KMS key ID
+      SnapshotIdentifier:
+        default: Redshift snapshot identifier
+      SnapshotAccountNumber:
+        default: AWS account-ID of the Redshift Snapshot
+      GlueCatalogDatabase:
+        default: Glue catalog database name
+      Maintenancewindow:
+        default: Maintenance window
+      TagEnvironment:
+        default: Environment
+      TagName:
+        default: Unique friendly name 
+Conditions:
+  RedshiftSingleNodeClusterCondition:
+    Fn::Equals:
+    - Ref: NumberOfNodes
+    - '1'
+  IsProd: !Equals [!Ref TagEnvironment, 'prod']
+  IsEncryptionAtRest: !Equals [!Ref EncryptionAtRest, 'true']
+  IsGlueCatalogName:
+    Fn::Not:
+    - Fn::Equals:
+      - ''
+      - Ref: GlueCatalogDatabase
+  IsSnapshotSpecified:
+    Fn::Not:
+    - Fn::Equals:
+      - ''
+      - Ref: SnapshotIdentifier
+  IsSnapshotAccountSpecified:
+    Fn::Not:
+    - Fn::Equals:
+      - ''
+      - Ref: SnapshotAccountNumber
+Resources:
+  RedshiftSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: "Redshift-Security-Group"
+      VpcId: !Ref VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref RedshiftClusterPort
+          ToPort: !Ref RedshiftClusterPort
+          CidrIp: !Ref RemoteAccessCIDR
+          Description: 'Redshift Access to VPC CIDR'
+      Tags:
+        -
+          Key: Name
+          Value: !Join
+                 - '_'
+                 - - !Ref TagName
+                   - !Sub '${AWS::StackName}-RedshiftSecurityGroup'
+        -
+          Key: Environment
+          Value: !Ref TagEnvironment
+
+  RedshiftClusterParameterGroup:
+    Type: 'AWS::Redshift::ClusterParameterGroup'
+    Properties:
+      Description: "Redshift-Cluster-Parameter-Group-CFTDEV"
+      ParameterGroupFamily: redshift-1.0
+      Parameters:
+        - ParameterName: enable_user_activity_logging
+          ParameterValue: !If [IsProd, 'true', 'false']
+        - ParameterName: require_ssl
+          ParameterValue: 'true'
+        - ParameterName: auto_analyze
+          ParameterValue: 'true'
+        - ParameterName: statement_timeout
+          ParameterValue: '43200000'
+        - ParameterName: max_concurrency_scaling_clusters
+          ParameterValue: !Ref MaxConcurrentCluster
+        - ParameterName: "wlm_json_configuration"
+          ParameterValue: "[ { \"query_group\" : [ ],\"query_group_wild_card\" : 0,\"user_group\" : [ ],\"user_group_wild_card\" : 0,\"concurrency_scaling\" : \"auto\",\"rules\" : [ {  \"rule_name\" : \"DiskSpilling\",  \"predicate\" : [ { \"metric_name\" : \"query_temp_blocks_to_disk\", \"operator\" : \">\", \"value\" : 100000  } ], \"action\" : \"log\"}, {  \"rule_name\" : \"RowJoining\",  \"predicate\" : [ { \"metric_name\" : \"join_row_count\", \"operator\" : \">\", \"value\" : 1000000000 } ],  \"action\" : \"log\"} ],\"priority\" : \"normal\",\"queue_type\" : \"auto\",\"auto_wlm\" : true }, {\"short_query_queue\" : true } ]"
+      Tags:
+        -
+          Key: Name
+          Value: !Join [ "-", [ !Ref TagName, !Ref 'AWS::StackName', "Primary Cluster Parameter group" ] ]
+        -
+          Key: Environment
+          Value: !Ref TagEnvironment
+
+  RedshiftClusterSubnetGroup:
+    Type: 'AWS::Redshift::ClusterSubnetGroup'
+    Properties:
+      Description: RedShift Cluster subnet group
+      SubnetIds: 
+        - !Ref Subnet1ID
+        - !Ref Subnet2ID
+        - !Ref Subnet3ID
+      Tags:
+        -
+          Key: Name
+          Value: !Join [ "-", [ !Ref TagName, !Ref 'AWS::StackName', "Primary Redshift Cluster Subnet group" ] ]
+        -
+          Key: Environment
+          Value: !Ref TagEnvironment
+
+  RedshiftCluster:
+    Type: 'AWS::Redshift::Cluster'
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      ClusterType: !If [RedshiftSingleNodeClusterCondition, "single-node", "multi-node"]
+      ClusterIdentifier: !Ref RedShiftClusterName
+      NumberOfNodes: !If [RedshiftSingleNodeClusterCondition, !Ref "AWS::NoValue", !Ref NumberOfNodes]
+      NodeType: !Ref NodeType
+      DBName: !Ref DatabaseName
+      KmsKeyId: !If [IsEncryptionAtRest, !Ref kmskey, !Ref "AWS::NoValue"]
+      Encrypted: !Ref EncryptionAtRest
+      Port: !Ref RedshiftClusterPort
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: "{{resolve:ssm-secure:rsadmindev:1}}"
+      ClusterParameterGroupName: !Ref RedshiftClusterParameterGroup
+      SnapshotIdentifier: !If [IsSnapshotSpecified, !Ref SnapshotIdentifier, !Ref "AWS::NoValue"]
+      OwnerAccount: !If [IsSnapshotAccountSpecified, !Ref SnapshotAccountNumber, !Ref "AWS::NoValue"]
+      VpcSecurityGroupIds:
+        - !Ref RedshiftSecurityGroup
+      PreferredMaintenanceWindow: !Ref Maintenancewindow
+      AutomatedSnapshotRetentionPeriod: !If [IsProd, 35, 8]
+      PubliclyAccessible: false
+      ClusterSubnetGroupName: !Ref RedshiftClusterSubnetGroup
+      IamRoles:
+          - !GetAtt RedShiftIAMServiceRole.Arn
+      Tags:
+        -
+          Key: Name
+          Value: !Join [ "-", [ !Ref TagName, !Ref 'AWS::StackName', "Redshift-Cluster" ] ]
+        -
+          Key: Environment
+          Value: !Ref TagEnvironment
+  GlueCatalogDB:
+    Condition: IsGlueCatalogName
+    Type: 'AWS::Glue::Database'
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+          Name: !Ref GlueCatalogDatabase
+          Description: "AWS-Glue-Catalog-Database"
+  kmsIAMManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: kms
+            Effect: Allow
+            Action:
+              - kms:CancelKeyDeletion
+              - kms:ConnectCustomKeyStore
+              - kms:CreateAlias
+              - kms:CreateCustomKeyStore
+              - kms:CreateGrant
+              - kms:CreateKey
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:DisconnectCustomKeyStore
+              - kms:EnableKey
+              - kms:EnableKeyRotation
+              - kms:Encrypt
+              - kms:GenerateDataKey
+              - kms:GenerateDataKeyWithoutPlaintext
+              - kms:GenerateRandom
+              - kms:GetKeyPolicy
+              - kms:GetKeyRotationStatus
+              - kms:GetParametersForImport
+              - kms:ImportKeyMaterial
+              - kms:ListAliases
+              - kms:ListGrants
+              - kms:ListKeyPolicies
+              - kms:ListKeys
+              - kms:ListResourceTags
+              - kms:ListRetirableGrants
+              - kms:PutKeyPolicy
+              - kms:ReEncryptFrom
+              - kms:ReEncryptTo
+              - kms:RetireGrant
+              - kms:RevokeGrant
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:UpdateAlias
+              - kms:UpdateCustomKeyStore
+              - kms:UpdateKeyDescription
+            Resource: "*"       
+          - 
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:Encrypt
+              - kms:GenerateDataKey
+              - kms:DescribeKey
+              - kms:ReEncrypt
+            Resource: "*" 
+  RedShiftIAMServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: IAMServiceRole-RedShift
+      Description: 'Please do not manually edit this role since it is created via cloudformation.'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - redshift.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonAthenaFullAccess       
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess 
+        - !Ref kmsIAMManagedPolicy          
+
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+      - Endpoint: !Ref NotificationList
+        Protocol: email
+  DiskSpacealarmredshift:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      MetricName: !Join 
+        - ''
+        - - !Ref RedshiftCluster
+          - High-PercentageDiskSpaceUsed
+      AlarmDescription: !Join 
+        - ''
+        - - DiskSpace Utilization > 85% for
+          - !Ref RedshiftCluster
+      Namespace: AWS/Redshift
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 85
+      AlarmActions:
+        - !Ref SNSTopic
+      Dimensions:
+        - Name: ClusterIdentifier
+          Value: !Ref RedshiftCluster
+      ComparisonOperator: GreaterThanThreshold
+      Unit: Percent
+  HighCPUutilizationalarmredshift:
+    Type: 'AWS::CloudWatch::Alarm'
+    Condition: IsProd
+    Properties:
+      MetricName: !Join 
+        - ''
+        - - !Ref RedshiftCluster
+          - High-CPUUtilization
+      AlarmDescription: !Join 
+        - ''
+        - - CPUUtilization > 95% for last 15 min for cluster
+          - !Ref RedshiftCluster
+      Namespace: AWS/Redshift
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 95
+      AlarmActions:
+        - !Ref SNSTopic
+      Dimensions:
+        - Name: ClusterIdentifier
+          Value: !Ref RedshiftCluster
+      ComparisonOperator: GreaterThanThreshold
+      Unit: Percent
+Outputs:
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
+  RedshiftClusterEndpoint:
+    Description: Redshift cluster endpoint
+    Value: !Sub "${RedshiftCluster.Endpoint.Address}:${RedshiftCluster.Endpoint.Port}"
+    # Export:
+    #   Name: !Sub '${AWS::StackName}-RedshiftClusterEndpoint'
+  RedshiftParameterGroupName:
+    Description: Redshift parameter group
+    Value: !Ref RedshiftClusterParameterGroup
+    # Export:
+    #   Name: !Sub '${AWS::StackName}-RedshiftParameterGroupName'
+  RedshiftDatabaseName:
+    Description: Redshift database name
+    Value: !If 
+              - IsSnapshotSpecified
+              - !Join [ ' ',['Check name of database from which the Snapshot', !Ref SnapshotIdentifier , ' was originally taken.']]
+              - !Ref DatabaseName
+    # Export:
+    #   Name: !Sub '${AWS::StackName}-RedshiftDatabaseName'
+  RedshiftUsername:
+    Value: !Ref MasterUsername
+  
+    # Export:
+    #   Name: !Sub '${AWS::StackName}-RedshiftUsername'
+  RedshiftClusterIAMRole:
+    Description: IAM Role assigned to Redshift cluster
+    Value: !GetAtt RedShiftIAMServiceRole.Arn
+    # Export:
+    #   Name: !Sub '${AWS::StackName}-RedshiftClusterIAMRole'
+  GlueCatalogDBName:
+    Description: AWS Glue Catalog database
+    Condition: IsGlueCatalogName
+    Value: !Ref GlueCatalogDB
+    # Export:
+    #   Name: !Sub '${AWS::StackName}-GlueCatalogDBName'
+  PSQLCommandLine:    
+    Description: PSQL command line
+    Value: !Join
+             - ''
+             - - 'psql -h '
+               - !GetAtt 'RedshiftCluster.Endpoint.Address' 
+               - ' -p '
+               - !GetAtt 'RedshiftCluster.Endpoint.Port'
+               - ' -U '
+               - !Ref MasterUsername
+               - ' -d '
+               - !Ref DatabaseName

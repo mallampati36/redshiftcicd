@@ -1,0 +1,39 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      docker: 18
+    commands: 
+      - pip install --upgrade awscli
+      
+  pre_build:
+    commands:
+      - aws s3 cp s3://$FLYWAY_ARTIFACTS_S3BUCKET_NAME/ ./flywayArtifacts/.  --recursive 
+      - chmod o+w ./flywayArtifacts/flyway-commandline-6.3.0-linux-x64.tar.gz
+      - echo Logging in to Amazon ECR...
+      - aws --version
+      - $(aws ecr get-login --region $AWS_DEFAULT_REGION --no-include-email)
+      - REPOSITORY_URI=${ECR_REPOSITORY_URI}
+      - REPOSITORY_NAME=${ECR_REPOSITORY_NAME}
+      - echo $REPOSITORY_URI
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:=latest}
+  build:
+    commands:
+      - echo Build started on 'date'
+      - echo Building the Docker image...
+      - echo Docker image pipeline triggering testing...
+      - docker build -f ./automation/Dockerfile -t $REPOSITORY_URI:latest .
+      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+      - echo Pushing the Docker images...
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      - aws ecr wait image-scan-complete --repository-name $REPOSITORY_NAME --image-id imageTag=$IMAGE_TAG 
+      - aws ecr describe-image-scan-findings --repository-name $REPOSITORY_NAME --image-id imageTag=$IMAGE_TAG --no-paginate --query "[ imageScanStatus.status,imageScanFindings.findingSeverityCounts.CRITICAL,imageScanFindings.findingSeverityCounts.HIGH]" --output text > scanStatus.txt
+      - awk '{if($1 == "COMPLETE" && $2 == "None" && $3 == "None"){ print $0} else{ print "MAJOR or CRITICAL vurnabilities in ECR scan"; exit 1;}} ' scanStatus.txt
+      - docker push $REPOSITORY_URI:latest
+  post_build:
+    commands:
+      - echo Build completed on 'date'
+      
+      

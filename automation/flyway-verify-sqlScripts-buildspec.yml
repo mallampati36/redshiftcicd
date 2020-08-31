@@ -1,0 +1,32 @@
+version: 0.2
+
+env:
+  secrets-manager:
+    REDSHIFT_USER: $SM_REDSHIFT_CICDIUSER_SECRET:username
+    REDSHIFT_PWD: $SM_REDSHIFT_CICDIUSER_SECRET:password
+    REDSHIFT_HOST: $SM_REDSHIFT_CICDIUSER_SECRET:host
+    REDSHIFT_PORT: $SM_REDSHIFT_CICDIUSER_SECRET:port
+    REDSHIFT_DBNAME: $SM_REDSHIFT_CICDIUSER_SECRET:dbname
+phases:
+  pre_build:
+    commands:
+      - cp -r ./automation/flyway/conf /redshiftFlyway/flyway-6.3.0/
+      - cp -r ./sql_ddls/$SCHEMA_NAME /redshiftFlyway/flyway-6.3.0/sql/
+      - grep -r -i '^[[:blank:]]*drop' ./sql_ddls/$SCHEMA_NAME/  > grepstatus.txt ||true
+      - cat grepstatus.txt
+      - awk 'END{ if(FNR > 0) {print "Remove drop statements from above script files";exit 1;} else{print "Continuing as there are no drop statements in the scpript files";} }' grepstatus.txt
+      - cd /redshiftFlyway/flyway-6.3.0/
+      - chmod +x ./flyway
+      - REDSHIFT_URL=jdbc:redshift://${REDSHIFT_HOST}:${REDSHIFT_PORT}/${REDSHIFT_DBNAME}
+      
+  build:
+    commands:
+      - echo Build started on 'date'
+      - ./flyway -configFiles=./conf/flyway.conf -url=$REDSHIFT_URL -user=$REDSHIFT_USER -password=$REDSHIFT_PWD  validate 2>> validateResponse.txt || true
+      - cat validateResponse.txt
+      - awk '{if(match($0,"Migration checksum mismatch")){ print $0; exit 1;}}' validateResponse.txt
+      - ./flyway -configFiles=./conf/flyway.conf -url=$REDSHIFT_URL -user=$REDSHIFT_USER -password=$REDSHIFT_PWD info 
+      
+  post_build:
+    commands:
+      - echo Build completed on 'date'

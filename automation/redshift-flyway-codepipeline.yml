@@ -1,0 +1,672 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Automate provisioning of CodeBuild with CodePipeline CodeCommit and Codebuild
+Parameters:
+  RepositoryName:
+    Type: String
+    Description: "Name of the Repository in CodeCommit"
+    Default: sqlddls 
+  RepositoryBranch:
+    Type: String
+    Default: dev
+  SecretsManagerCICDUserSecretName:
+    Type: String
+    Description: The name of the Redshift CICD user secret name
+    Default: redshift/redshiftcicd/user
+  FlywayArtifactsS3BucketName:
+    Type: String
+    Default: flyway-artefact-bucket-dev
+  RedshiftClusterName:
+    Type: String
+    Description: Redshift Cluster Name
+    Default: cftrsclusterdev
+  RedshiftSchemaName:
+    Type: String
+    Description: Redshift db schema name
+    Default: poc_flyway
+  RedshiftDatabaseName:
+    Type: String
+    Description: Redshift db name
+    Default: poc_flyway  
+  RedshiftCICDUserName:
+    Type: String
+    Description: Redshift database cicd user Name
+    Default: cicduser
+  ApproversForReshiftCICDCodePipelines:
+    Description: Email ID of Approver of change request
+    Type: 'String'
+    Default: "sandeep.mallampati36@gmail.com"
+  VPCID: 
+    Description: The ID of your existing VPC that we're deploying codebuild.
+    Type : String
+    Default: "vpc-0eb96701a9b96545b"
+  Subnet1ID:
+    Description: The ID of the private subnet in Availability Zone 1 in existing VPC.
+    Type : String
+    Default: "subnet-018c95e0fb58f0910"
+  Subnet2ID:
+    Description: The ID of the private subnet in Availability Zone 2 in existing VPC.
+    Type : String
+    Default: "subnet-0fc898e99ae426e58"
+  tagEnvName:
+    Description: Name of the environment
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - preprod
+      - prod
+Resources:
+  RedshiftCBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: "ASPERITAS-Redshift-CB-Security-Group"
+      VpcId: !Ref VPCID
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: 'enabling hhtps access'
+        - IpProtocol: tcp
+          FromPort: 5439
+          ToPort: 5439
+          CidrIp: 0.0.0.0/0
+          Description: 'enabling hhtps access'
+      Tags:
+        -
+          Key: Name
+          Value: !Join
+                 - '_'
+                 - - !Ref tagEnvName
+                   - !Sub '${AWS::StackName}-Redshift-CB-SecurityGroup'
+        -
+          Key: Environment
+          Value: !Ref tagEnvName  
+  RedshiftCodeBuildIAMManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:PutObject
+            Resource: 
+              - !Sub arn:aws:s3:::codepipeline-artefact-bucket-${tagEnvName}
+              - !Sub arn:aws:s3:::codepipeline-artefact-bucket-${tagEnvName}/*
+              - !Sub arn:aws:s3:::flyway-artefact-bucket-${tagEnvName}
+              - !Sub arn:aws:s3:::flyway-artefact-bucket-${tagEnvName}/*
+          - Effect: Allow
+            Action:
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeVpcs
+              - ec2:DescribeSubnets
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DeleteNetworkInterface
+              - ec2:DescribeDhcpOptions
+              - ec2:CreateNetworkInterface
+              - ec2:CreateNetworkInterfacePermission
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ssm:GetParameters
+            Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: 
+              - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretsManagerCICDUserSecretName}-*'
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: "arn:aws:logs:*:*:*"
+          - Effect: Allow
+            Action:
+              - codecommit:GitPull
+              - codecommit:GitPush
+            Resource: !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${RepositoryName}  
+          - Effect: Allow
+            Action:
+              - redshift:CreateClusterSnapshot
+            Resource: "*"  
+          - Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:GetRepositoryPolicy
+              - ecr:DescribeRepositories
+              - ecr:ListImages
+              - ecr:DescribeImages
+              - ecr:BatchGetImage
+              - ecr:GetLifecyclePolicy
+              - ecr:GetLifecyclePolicyPreview
+              - ecr:ListTagsForResource
+              - ecr:DescribeImageScanFindings
+              - ecr:StartImageScan
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+            Resource: "*"  
+  RedshiftCodeBuildIAMServiceRole:
+    Type: 'AWS::IAM::Role'
+    DependsOn:
+      - S3Bucket    
+    Properties:
+      Description: 'Please do not manually edit this role since it is created via cloudformation.'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - !Ref RedshiftCodeBuildIAMManagedPolicy
+  RedshiftCodePipelineIAMManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:PutObject
+            Resource:
+              - !Sub arn:aws:s3:::codepipeline-artefact-bucket-${tagEnvName}
+              - !Sub arn:aws:s3:::codepipeline-artefact-bucket-${tagEnvName}/*            
+          - Effect: Allow
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:DeleteStack
+              - cloudformation:DescribeStacks
+              - cloudformation:UpdateStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:SetStackPolicy
+              - cloudformation:ValidateTemplate
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - codebuild:BatchGetBuilds
+              - codebuild:StartBuild
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - codecommit:GetBranch
+              - codecommit:GetCommit
+              - codecommit:UploadArchive
+              - codecommit:GetUploadArchiveStatus
+              - codecommit:CancelUploadArchive
+            Resource: !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${RepositoryName}
+          - Effect: Allow
+            Action:
+              - sns:publish
+            Resource:
+              - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:redshift-cicd-codepipeline-topic
+  RedshiftCodePipelineIAMServiceRole:
+    Type: 'AWS::IAM::Role'
+    DependsOn:
+      - S3Bucket  
+    Properties:
+      Description: 'Please do not manually edit this role since it is created via cloudformation.'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - !Ref RedshiftCodePipelineIAMManagedPolicy       
+  RedshiftCICDCodePipelineSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: RedshiftCICDCodePipelineSNSTopic
+      TopicName: redshift-cicd-codepipeline-topic
+      KmsMasterKeyId:
+                "Fn::Join":
+                  - ":"
+                  - - "arn:aws:kms"
+                    - Ref: "AWS::Region"
+                    - Ref: "AWS::AccountId"
+                    - "alias/aws/sns"      
+      Subscription:
+        - Endpoint: !Select [0, !Split [",", !Ref ApproversForReshiftCICDCodePipelines]]
+          Protocol: email
+  # Creating policy for SNS Topic for CodePipeline approver
+  SnsTopicPolicyCodePipelineApprover:
+    DependsOn:
+      - RedshiftCICDCodePipelineSNSTopic
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:redshift-cicd-codepipeline-topic
+      PolicyDocument:
+        Statement:
+          - Sid: SNSPublishGrantforEvents
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: "*"
+
+  RedshiftCreateFlywayDockerImageCodePipeline:
+    Type: "AWS::CodePipeline::Pipeline"
+    Properties:
+      Name: "Redshift-CreateFlywayDockerImagePipeline"
+      RoleArn: !GetAtt RedshiftCodePipelineIAMServiceRole.Arn
+      ArtifactStore: 
+        Location: !Sub "codepipeline-artefact-bucket-${tagEnvName}"
+        Type: "S3"
+      Stages: 
+        - Name: "Source"
+          Actions: 
+            - Name: "Source"
+              ActionTypeId: 
+                Category: "Source"
+                Owner: "AWS"
+                Provider: "CodeCommit"
+                Version: "1"
+              Configuration: 
+                BranchName: !Ref RepositoryBranch
+                PollForSourceChanges: "false"
+                RepositoryName: !Ref RepositoryName
+              InputArtifacts: [
+                ]
+              OutputArtifacts: 
+              - Name: !Join
+                - '-'
+                - - !Ref 'AWS::StackName'
+                  - SourceArtifact
+              Region: !Ref AWS::Region
+              RunOrder: 1
+        - Name: "Build"
+          Actions: 
+            - Name: "Build"
+              ActionTypeId: 
+                Category: "Build"
+                Owner: "AWS"
+                Provider: "CodeBuild"
+                Version: "1"
+              Configuration: 
+                ProjectName: !Ref RedshiftCreateFlywayDockerImageCodeBuild
+              InputArtifacts: 
+              - Name: !Join
+                - '-'
+                - - !Ref 'AWS::StackName'
+                  - SourceArtifact
+              OutputArtifacts: 
+                - Name: !Join
+                  - '-'
+                  - - !Ref 'AWS::StackName'
+                    - BuildArtifact
+              Region: !Ref AWS::Region
+              RunOrder: 1
+  RedshiftCreateFlywayDockerImageCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: CreateFlywayDockerImage-build-project      
+      ServiceRole: !GetAtt RedshiftCodeBuildIAMServiceRole.Arn
+      Artifacts:
+        Type: "CODEPIPELINE"
+      LogsConfig:
+        CloudWatchLogs:
+          Status: "ENABLED"
+          GroupName: !Ref RepositoryName
+          StreamName: "flyway"
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:3.0
+        PrivilegedMode: True
+        EnvironmentVariables:
+          - Name: ECR_REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${FlywayDockerImageECRRepository}
+            Type: PLAINTEXT  
+          - Name: ECR_REPOSITORY_NAME
+            Value: !Sub ${FlywayDockerImageECRRepository}
+            Type: PLAINTEXT
+          - Name: FLYWAY_ARTIFACTS_S3BUCKET_NAME
+            Value: !Ref FlywayArtifactsS3BucketName
+            Type: PLAINTEXT       
+      Cache:
+        Type: LOCAL
+        Modes: 
+          - LOCAL_DOCKER_LAYER_CACHE
+      Source: 
+        GitCloneDepth: 1
+        Type: "CODEPIPELINE"
+        BuildSpec: ./automation/buildspec.yml        
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 480
+      EncryptionKey: 
+          "Fn::Join":
+            - ":"
+            - - "arn:aws:kms"
+              - Ref: "AWS::Region"
+              - Ref: "AWS::AccountId"
+              - "alias/aws/s3"
+  RedshiftFlywaySchemaDeploymentCodePipeline:
+    Type: "AWS::CodePipeline::Pipeline"
+    Properties:
+      Name: "RedshiftFlywaySchemaDeploymentCodePipeline"
+      RoleArn: !GetAtt RedshiftCodePipelineIAMServiceRole.Arn
+      ArtifactStore: 
+        Location: !Sub "codepipeline-artefact-bucket-${tagEnvName}"
+        Type: "S3"
+      Stages: 
+        - Name: "Source"
+          Actions: 
+            - Name: "Source"
+              ActionTypeId: 
+                Category: "Source"
+                Owner: "AWS"
+                Provider: "CodeCommit"
+                Version: "1"
+              Configuration: 
+                BranchName: !Ref RepositoryBranch
+                PollForSourceChanges: "false"
+                RepositoryName: !Ref RepositoryName
+              OutputArtifacts: 
+              - Name: !Join
+                - '-'
+                - - !Ref 'AWS::StackName'
+                  - SourceArtifact
+              Region: !Ref AWS::Region
+              RunOrder: 1
+        - Name: "SQLScriptsMigrationToRedshiftSchema"
+          Actions: 
+            - Name: "VerifySQLScripts"
+              ActionTypeId: 
+                Category: "Build"
+                Owner: "AWS"
+                Provider: "CodeBuild"
+                Version: "1"
+              Configuration: 
+                ProjectName: !Ref RedshiftFlywayVerifySQLScriptsCodebuild
+                EnvironmentVariables: !Sub '[{"name":"SM_REDSHIFT_CICDIUSER_SECRET","value":"${SecretsManagerCICDUserSecretName}","type":"PLAINTEXT"},{"name":"SCHEMA_NAME","value":"${RedshiftSchemaName}","type":"PLAINTEXT"}]'
+              InputArtifacts: 
+              - Name: !Join
+                - '-'
+                - - !Ref 'AWS::StackName'
+                  - SourceArtifact
+              Region: !Ref AWS::Region
+              RunOrder: 1
+            - Name: "ManualApproval"
+              ActionTypeId: 
+                Category: "Approval"
+                Owner: "AWS"
+                Provider: "Manual"
+                Version: "1"
+              Configuration: 
+                CustomData: !Sub 'Change in ${tagEnvName} environment source scripts. Please approve/reject the pipeline execution with comments. To review the changes please click on details link in VerifySQLScripts section. On Approving pilepine will create a Redshift cluster snapshot and applies the changes to schema'
+                NotificationArn: !Ref RedshiftCICDCodePipelineSNSTopic
+              InputArtifacts: []
+              OutputArtifacts: []
+              Region: !Ref AWS::Region
+              RunOrder: 2
+            - Name: "CreateRedshiftManualSnapshot"
+              ActionTypeId: 
+                Category: "Build"
+                Owner: "AWS"
+                Provider: "CodeBuild"
+                Version: "1"
+              Configuration: 
+                ProjectName: !Ref CreateRedshiftManualSnapshotCodeBuild
+                EnvironmentVariables: !Sub '[{"name":"REDSHIFT_CLUSTER_NAME","value":"${RedshiftClusterName}","type":"PLAINTEXT"},{"name":"SCHEMA_NAME","value":"il","type":"PLAINTEXT"},{"name":"SCHEMA_NAME","value":"${RedshiftSchemaName}","type":"PLAINTEXT"}]'
+              InputArtifacts:
+              - Name: !Join
+                - '-'
+                - - !Ref 'AWS::StackName'
+                  - SourceArtifact
+              Region: !Ref AWS::Region
+              RunOrder: 3
+            - Name: "FlywayDeploySQLScriptChangesToRedshift"
+              ActionTypeId: 
+                Category: "Build"
+                Owner: "AWS"
+                Provider: "CodeBuild"
+                Version: "1"
+              Configuration: 
+                ProjectName: !Ref FlywayDeploySQLScriptChangesToRedshiftCodeBuild
+                EnvironmentVariables: !Sub '[{"name":"SM_REDSHIFT_CICDIUSER_SECRET","value":"${SecretsManagerCICDUserSecretName}","type":"PLAINTEXT"},{"name":"SCHEMA_NAME","value":"${RedshiftSchemaName}","type":"PLAINTEXT"}]'
+              InputArtifacts: 
+              - Name: !Join
+                - '-'
+                - - !Ref 'AWS::StackName'
+                  - SourceArtifact
+              Region: !Ref AWS::Region
+              RunOrder: 4    
+  RedshiftFlywayVerifySQLScriptsCodebuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: RedshiftFlyway-verify-SQL-Scripts      
+      ServiceRole: !GetAtt RedshiftCodeBuildIAMServiceRole.Arn
+      Artifacts:
+        Type: "CODEPIPELINE"
+      LogsConfig:
+        CloudWatchLogs:
+          Status: "ENABLED"
+          GroupName: !Ref RepositoryName
+          StreamName: "flyway"
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${FlywayDockerImageECRRepository}:latest
+        ImagePullCredentialsType: CODEBUILD
+        
+      Cache:
+        Type: LOCAL
+        Modes: 
+          - LOCAL_DOCKER_LAYER_CACHE
+      Source: 
+        GitCloneDepth: 1
+        Type: "CODEPIPELINE"
+        BuildSpec: ./automation/flyway-verify-sqlScripts-buildspec.yml        
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 480
+      EncryptionKey: 
+          "Fn::Join":
+            - ":"
+            - - "arn:aws:kms"
+              - Ref: "AWS::Region"
+              - Ref: "AWS::AccountId"
+              - "alias/aws/s3"
+      VpcConfig:
+        SecurityGroupIds: 
+          - !Ref RedshiftCBSecurityGroup
+        Subnets: 
+          - !Ref Subnet1ID
+          - !Ref Subnet2ID
+        VpcId: !Ref VPCID      
+  FlywayDeploySQLScriptChangesToRedshiftCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: RedshiftFlyway-Deploy-SQL-Scripts      
+      ServiceRole: !GetAtt RedshiftCodeBuildIAMServiceRole.Arn
+      Artifacts:
+        Type: "CODEPIPELINE"
+      LogsConfig:
+        CloudWatchLogs:
+          Status: "ENABLED"
+          GroupName: !Ref RepositoryName
+          StreamName: "flyway"
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${FlywayDockerImageECRRepository}:latest
+        ImagePullCredentialsType: CODEBUILD
+        
+      Cache:
+        Type: LOCAL
+        Modes: 
+          - LOCAL_DOCKER_LAYER_CACHE
+      Source: 
+        GitCloneDepth: 1
+        Type: "CODEPIPELINE"
+        BuildSpec: ./automation/flyway-deploy-sqlScripts-buildspec.yml     
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 480
+      EncryptionKey: 
+          "Fn::Join":
+            - ":"
+            - - "arn:aws:kms"
+              - Ref: "AWS::Region"
+              - Ref: "AWS::AccountId"
+              - "alias/aws/s3"
+      VpcConfig:
+        SecurityGroupIds: 
+          - !Ref RedshiftCBSecurityGroup
+        Subnets: 
+          - !Ref Subnet1ID
+          - !Ref Subnet2ID
+        VpcId: !Ref VPCID      
+  CreateRedshiftManualSnapshotCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: Redshift-CreateManualSnapshot-build-project      
+      ServiceRole: !GetAtt RedshiftCodeBuildIAMServiceRole.Arn
+      Artifacts:
+        Type: "CODEPIPELINE"
+      LogsConfig:
+        CloudWatchLogs:
+          Status: "ENABLED"
+          GroupName: !Ref RepositoryName
+          StreamName: "flyway"
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:3.0
+        PrivilegedMode: True
+      Cache:
+        Type: LOCAL
+        Modes: 
+          - LOCAL_DOCKER_LAYER_CACHE
+      Source: 
+        GitCloneDepth: 1
+        Type: "CODEPIPELINE"
+        BuildSpec: ./automation/buildspecCreateSnapshot.yml        
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 480  
+      EncryptionKey: 
+          "Fn::Join":
+            - ":"
+            - - "arn:aws:kms"
+              - Ref: "AWS::Region"
+              - Ref: "AWS::AccountId"
+              - "alias/aws/s3"
+      VpcConfig:
+        SecurityGroupIds: 
+          - !Ref RedshiftCBSecurityGroup
+        Subnets: 
+          - !Ref Subnet1ID
+          - !Ref Subnet2ID
+        VpcId: !Ref VPCID      
+  S3Bucket:
+    Type: "AWS::S3::Bucket"
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName:
+        Fn::Sub: codepipeline-artefact-bucket-${tagEnvName}
+      AccessControl: Private
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID:
+                "Fn::Join":
+                  - ":"
+                  - - "arn:aws:kms"
+                    - Ref: "AWS::Region"
+                    - Ref: "AWS::AccountId"
+                    - "alias/aws/s3"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: env
+          Value:
+            Fn::Sub: ${tagEnvName}
+        - Key: createdby
+          Value: Cloudformation
+  S3BucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Bucket:
+        Ref: S3Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: Policy1504640911349
+        Statement:
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: "*"
+            Action: "*"
+            Resource: !Join
+              - ""
+              - - !GetAtt
+                  - S3Bucket
+                  - Arn
+                - /*
+            Condition:
+              Bool:
+                "aws:SecureTransport": false   
+  FlywayDockerImageECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: flyway-image
+      ImageScanningConfiguration: 
+        scanOnPush: "true"
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: CodeBuildAccess
+            Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action:
+              - 'ecr:BatchCheckLayerAvailability'
+              - 'ecr:BatchGetImage'
+              - 'ecr:GetDownloadUrlForLayer'   
+  SMRedshiftCICDSecret:
+    Type: 'AWS::SecretsManager::Secret'
+    Properties:
+      Name: !Ref SecretsManagerCICDUserSecretName
+      Description: This secret has a random generated password in SecretString (use GenerateSecretString) 
+      KmsKeyId: 
+        !ImportValue RedshiftcicdCMKKey-KeyId
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "${RedshiftCICDUserName}", "dbname": "${RedshiftDatabaseName}"}'
+        GenerateStringKey: "password"
+        PasswordLength: 30
+        ExcludeCharacters: '"@/\'
+  SecretRedshiftCluster1Attachment:
+    Type: "AWS::SecretsManager::SecretTargetAttachment"
+    Properties:
+      SecretId: !Ref SMRedshiftCICDSecret
+      TargetId: !Ref RedshiftClusterName
+      TargetType: AWS::Redshift::Cluster

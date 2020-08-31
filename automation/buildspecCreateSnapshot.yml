@@ -1,0 +1,14 @@
+version: 0.2
+
+phases:
+  
+  build:
+    commands:
+      - echo Build started on 'date'
+      #aws cli command to create manual snapshot with retantion period as 1
+      - aws redshift create-cluster-snapshot --cluster-identifier $REDSHIFT_CLUSTER_NAME --snapshot-identifier redshiftcicd-snapshot-$CODEBUILD_BUILD_NUMBER --manual-snapshot-retention-period 1
+  post_build:
+    commands:
+      - echo Build completed on 'date'
+      
+      
