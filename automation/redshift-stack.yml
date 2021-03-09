@@ -22,7 +22,7 @@ Parameters:
     Description: The ID of the private subnet in Availability Zone 3 in existing VPC.
     Type : 'String'
     Default: "subnet-054d611630eb610c5"
-  RedShiftClusterName:
+  RedshiftClusterName:
     Description: The name of the first cluster to be created when the cluster is created.
     Type: String
     Default: "cftrscluster"
@@ -277,7 +277,7 @@ Resources:
     UpdateReplacePolicy: Snapshot
     Properties:
       ClusterType: !If [RedshiftSingleNodeClusterCondition, "single-node", "multi-node"]
-      ClusterIdentifier: !Ref RedShiftClusterName
+      ClusterIdentifier: !Ref RedshiftClusterName
       NumberOfNodes: !If [RedshiftSingleNodeClusterCondition, !Ref "AWS::NoValue", !Ref NumberOfNodes]
       NodeType: !Ref NodeType
       DBName: !Ref DatabaseName

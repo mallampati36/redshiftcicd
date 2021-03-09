@@ -430,7 +430,7 @@ Resources:
                 Version: "1"
               Configuration: 
                 ProjectName: !Ref CreateRedshiftManualSnapshotCodeBuild
-                EnvironmentVariables: !Sub '[{"name":"REDSHIFT_CLUSTER_NAME","value":"${RedshiftClusterName}","type":"PLAINTEXT"},{"name":"SCHEMA_NAME","value":"il","type":"PLAINTEXT"},{"name":"SCHEMA_NAME","value":"${RedshiftSchemaName}","type":"PLAINTEXT"}]'
+                EnvironmentVariables: !Sub '[{"name":"REDSHIFT_CLUSTER_NAME","value":"${RedshiftClusterName}","type":"PLAINTEXT"},{"name":"SCHEMA_NAME","value":"${RedshiftSchemaName}","type":"PLAINTEXT"}]'
               InputArtifacts:
               - Name: !Join
                 - '-'
